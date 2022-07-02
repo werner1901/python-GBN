@@ -39,86 +39,92 @@ class Server:
     last_ack = 0
     msg_timer = 0 # 收到数据计时
 
-    #检查发送窗是否已满。没满加入一些data
-    while len(self.sendWindow) < self.sendWindowMax:
-      if(self.seqnum > self.pkgNum):
-        break
-      data = Data(buffer[self.seqnum - 1], 0, seq=self.seqnum)
-      self.sendWindow.append(data)
-      self.seqnum +=1
+    while True:
 
-    #查看发送窗里的数据，如果有没发送的就发出去
-    for data in self.sendWindow:
-      if data.state == 0:
-        print('server发送数据：',data.seq)
-        self.socket.sendto(str(data).encode(),self.clientAddr)
-        data.state = 1
+      #检查发送窗是否已满。没满加入一些data
+      while len(self.sendWindow) < self.sendWindowMax:
+        if(self.seqnum > self.pkgNum):
+          break
+        data = Data(buffer[self.seqnum - 1], 0, seq=self.seqnum)
+        self.sendWindow.append(data)
+        self.seqnum +=1
 
-    #窗内的数据已经发完，而且不再有新数据，退出
-    if len(self.sendWindow) == 0 :
-      if pkgTimer > self.maxDelayTime and msg_timer > self.maxWaitTime:
-        print('server: 发送/接收完毕, 退出')
-
-    #如果确认序号返回超时，把发送窗里的数据状态改成未发送
-    if pkgTimer > self.maxDelayTime:
-      resend = []
+      #查看发送窗里的数据，如果有没发送的就发出去
       for data in self.sendWindow:
-        data.state = 0
-        resend.append(data.seq)
-      if len(resend) > 0:
-        print('server: 发生超时，重传',resend)
+        if data.state == 0:
+          print('server发送数据：',data.seq)
+          self.socket.sendto(str(data).encode(),self.clientAddr)
+          data.state = 1
 
-    readable,writeable,errors = select.select([self.socket, ], [], [], 1) #四个参数监听可读，可写，错误，以及每隔一秒监听一次
+      #窗内的数据已经发完，而且不再有新数据，退出
+      if len(self.sendWindow) == 0 :
+        if pkgTimer > self.maxDelayTime and msg_timer > self.maxWaitTime:
+          print('server: 发送/接收完毕, 退出')
 
-    #当服务端发来数据
-    if len(readable) > 0:
-      message,address = self.socket.recvfrom(1024)
-      msg = message.decode()
-      if msg[1] == '1': #收到ACK，重新计时
-        pkgTimer = 0
-        print('server: 收到ACK ', msg[0])
-        ack_num = msg[0]
-        for i in range(len(self.sendWindow)):
-          if ack_num == self.sendWindow[i].seq:
-            self.sendWindow = self.sendWindow[i + 1:]
-            break
-      else: #收到的是数据(全双工通道，两边都在互传message)
-        pkgTimer += 1
-        print('server: 收到MSG = ', msg[0])
-        ackNum = int(msg[0])
-        msg_timer = 0
+      #如果确认序号返回超时，把发送窗里的数据状态改成未发送
+      if pkgTimer > self.maxDelayTime:
+        resend = []
+        for data in self.sendWindow:
+          data.state = 0
+          resend.append(data.seq)
+        if len(resend) > 0:
+          print('server: 发生超时，重传',resend)
 
-        if last_ack == ackNum - 1:
-          # 丢包率为0.2
-          if random() < 0.1:
-            print('server: 模拟发生丢包, 丢失的包的seq为', str(ackNum))
-          else:
+      readable,writeable,errors = select.select([self.socket, ], [], [], 1) #四个参数监听可读，可写，错误，以及每隔一秒监听一次
+
+      #当服务端发来东西
+      if len(readable) > 0:
+        message,address = self.socket.recvfrom(2048)
+        msg = message.decode()
+        if msg[1] == '1': #收到ACK，重新计时
+          pkgTimer = 0
+          print('server: 收到ACK ', msg[0])
+          ack_num = msg[0]
+          for i in range(len(self.sendWindow)):
+            if ack_num == self.sendWindow[i].seq:
+              self.sendWindow = self.sendWindow[i + 1:]
+              break
+        else: #收到的是数据(全双工通道，两边都在互传message)
+          pkgTimer += 1
+          print('server: 收到MSG = ', msg[0])
+          ackNum = int(msg[0])
+          msg_timer = 0
+
+          if last_ack == ackNum - 1:
+            # 丢包率为0.2
+            if random() < 0.1:
+              print('server: 模拟发生丢包, 丢失的包的seq为', str(ackNum))
+              continue
             if random() < 0.1:
               print('server: 模拟ACK丢失, 丢失ACK为 ', str(ackNum))
               self.rev_data += msg[2:]
               last_ack = ackNum
-          data = Data('', 1, seq=ackNum)
-          self.socket.sendto(str(data).encode(),address)
-          print('server: 发送ACK ', str(ackNum))
-          last_ack = ackNum
-          self.rev_data += msg[2:]
-        else:
-            print('server: 收到的MSG不是需要的，发送当前收到的最大的ACK ', last_ack)
-            data = Data('', 1, seq=last_ack)
+              continue
+            data = Data('', 1, seq=ackNum)
             self.socket.sendto(str(data).encode(),address)
-    else:
-      pkgTimer += 1
-      msg_timer += 1
+            print('server: 发送ACK ', str(ackNum))
+            last_ack = ackNum
+            self.rev_data += msg[2:]
+          else:
+              print('server: 收到的MSG不是需要的，发送当前收到的最大的ACK ', last_ack)
+              data = Data('', 1, seq=last_ack)
+              self.socket.sendto(str(data).encode(),address)
+      else:
+        pkgTimer += 1
+        msg_timer += 1
 
   def start(self):
     buffer = []
-    f = open('client_send.txt', 'r',encoding='utf8')
-    seq = f.read(500)
-    for i in range(len(seq)):
-      buffer.append(seq[i])
+    with open('client_send.txt', 'r',encoding='utf8') as f:
+      while True:
+        seq = f.read(500)
+        if len(seq) > 0:
+          buffer.append(seq)
+        else:
+          break
     readable, writeable, errors = select.select([self.socket, ], [], [], 20) #此处监听20秒
     if (len(readable) > 0):
-      message, address = self.socket.recvfrom(1024)
+      message, address = self.socket.recvfrom(2048)
       if message.decode() == '-testgbn':
         self.send(buffer)
 
